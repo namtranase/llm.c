@@ -437,7 +437,7 @@ void crossentropy_softmax_backward(float* dlogits,
 // ----------------------------------------------------------------------------
 // GPT-2 model definition
 
-// the parameters of the model
+// the tensors parameters of the model
 #define NUM_PARAMETER_TENSORS 16
 typedef struct {
     float* wte; // (V, C)
@@ -467,11 +467,13 @@ float* malloc_and_point_parameters(ParameterTensors* params, size_t* param_sizes
     // malloc all parameters all at once
     float* params_memory = (float*)malloc(num_parameters * sizeof(float));
     // assign all the tensors
+    // Pointers of pointers
     float** ptrs[] = {
         &params->wte, &params->wpe, &params->ln1w, &params->ln1b, &params->qkvw, &params->qkvb,
         &params->attprojw, &params->attprojb, &params->ln2w, &params->ln2b, &params->fcw, &params->fcb,
         &params->fcprojw, &params->fcprojb, &params->lnfw, &params->lnfb
     };
+    // This alocate to each tensor?
     float* params_memory_iterator = params_memory;
     for (size_t i = 0; i < NUM_PARAMETER_TENSORS; i++) {
         *(ptrs[i]) = params_memory_iterator;
