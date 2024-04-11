@@ -8,7 +8,7 @@ nvcc -O3 --use_fast_math -Xcompiler -fopenmp matmul_forward.cu -o matmul_forward
 version 1 is naive port from CPU code to kernel: parallelizes over B,T, loops over C
 OMP_NUM_THREADS=32 ./matmul_forward 1
 
-version 2 parallelizes over all of B,T,C
+version 2 calls cuBLAS, very fast
 OMP_NUM_THREADS=32 ./matmul_forward 2
 */
 
@@ -90,7 +90,7 @@ __global__ void matmul_forward_kernel1(float* out,
 __global__ void add_bias(float* out, float* bias, int B, int T, int OC) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
-    for (int i = idx; i < B*T*OC; i += stride) {
+    for (int i = idx; i < B * T * OC; i += stride) {
         int col = i % OC;
         out[i] += bias[col];
     }
@@ -133,10 +133,10 @@ void matmul_forward2(float* out,
     // where A is mxk, B is kxn, C is mxn
     // now, because we use row-major storage, cuBLAS (which is column-major) sees our matrices transposed.
     // algorithmically / in e.g. PyTorch we want to do: out = inp @ weight.T
-    // but because cuBLAS is column-major, we actually want to get it to calculate out^T. Mathematically, this is:
-    // out^T = weight @ inp^T
+    // but because cuBLAS is column-major, we actually want to get it to calculate out.T . Mathematically, this is:
+    // out.T = weight @ inp.T
     // but again, our variables look transposed, so using the actual weight/inp we have here in this function, this becomes
-    // out^T = weight.T @ inp
+    // out.T = weight.T @ inp
     // so we need to get cuBLAS to calculate weight.T @ inp (the variables here are the actual ones in this function)
     // => need to call cuBLAS with A = weight, B = inp
     // => need to call cuBLAS with transa = CUBLAS_OP_T, transb = CUBLAS_OP_N
@@ -239,12 +239,12 @@ int main(int argc, char **argv) {
             printf("%f %f\n", out[i], out_gpu[i]);
         }
         // ensure correctness for all elements
-        if (i >= 5 && fabs(out[i] - out_gpu[i]) > 1e-4) {
+        if (fabs(out[i] - out_gpu[i]) > 1e-4) {
             printf("Mismatch at %d: %f vs %f\n", i, out[i], out_gpu[i]);
             exit(1);
         }
     }
-    printf("Results match at block_size=256!\n");
+    printf("Results match at block_size=1024!\n");
 
     // time the kernel at different block sizes
     int sqrt_block_sizes[] = {4, 8, 16, 32};
