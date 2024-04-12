@@ -129,3 +129,76 @@ block_size 1024 | time 0.075942 ms | bandwidth 662.765259 GB/s
 
 ## Example of matmul_forward
 
+CPU code, loop over batch, sequence length, and output channel.
+```cpp
+// inp is (B,T,C), weight is (OC, C), bias is (OC)
+// out will be (B,T,OC)
+
+void matmul_forward_cpu(float* out,
+                    float* inp, float* weight, float* bias,
+                    int B, int T, int C, int OC) {
+    // OC is short for "output channels"
+    // inp is (B,T,C), weight is (OC, C), bias is (OC)
+    // out will be (B,T,OC)
+    #pragma omp parallel for collapse(2)
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            float* out_bt = out + b * T * OC + t * OC;
+            float* inp_bt = inp + b * T * C + t * C;
+            for (int o = 0; o < OC; o++) {
+                float val = (bias != NULL) ? bias[o] : 0.0f;
+                float* wrow = weight + o*C;
+                for (int i = 0; i < C; i++) {
+                    val += inp_bt[i] * wrow[i];
+                }
+                out_bt[o] = val;
+            }
+        }
+    }
+}
+```
+
+Naive kernel, each thread handles one element of out (one channel)
+```cpp
+// two dimension of gridDim and blockDim for convenient with matrix multiply
+dim3 gridDim(CEIL_DIV(B * T, sqrt_block_size), CEIL_DIV(OC, sqrt_block_size));
+dim3 blockDim(sqrt_block_size, sqrt_block_size);
+
+// this access to a row of weight matrix (one OC)
+int bt = blockIdx.x * blockDim.x + threadIdx.x;
+int oc = blockIdx.y * blockDim.y + threadIdx.y;
+
+// actually I don't really understand this line, but for now I assume that it refer to the batch and the token position
+int b = bt / BT;
+int t = bt % BT;
+
+// The bias should be add with other kernel, the author seem to find the best way to fuse this operation into matmul
+int idx = blockIdx.x * blockDim.x + threadIdx.x;
+int stride = blockDim.x * gridDim.x;
+for (int i = idx; i < B * T * OC; i += stride) {
+    int col = i % OC;
+    out[i] += bias[col];
+}
+// Other code is the same as CPU code
+```
+
+cuBLAS kernel is fucking insane, it faster than normal kernel ~50 times
+
+```cpp
+// inp is (B*T, C), weight is (OC, C), out is (B*T, OC)
+// cuBLAS dose: C = alpha *A * B + beta * C
+// where A is mxk, B is kxn, C is mxn
+
+// In Pytorch, we want: inp @ weight.T
+// but cuBLAS is columm major, -> out.T = weight @ inp.T
+// in this repo, the variables look transposed -> this become out.T = weight.T @ inp
+
+// Need to call cuBLAS with A = weight, B = inp
+
+const float alpha = 1.0f;
+const float beta = 0.0f;
+stat = cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, OC, B*T, C, &alpha, weight, C, inp, C, &beta, out, OC);
+// A need to transpose via CUBLAS_OP_T
+```
+
+
